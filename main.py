@@ -1,79 +1,115 @@
+import copy
 import cv2
 import numpy as np
 from keras.models import load_model
 import time
+import tkinter as tk
 
-gesture_names = {0: 'Nam', 1: 'L', 2: 'OK', 3: 'Hai', 4: 'Xoe'}
+prediction = ''
+score = 0
+bgModel = None
+
+gesture_names = {0: 'nam',
+                 1: 'L',
+                 2: 'ok',
+                 3: 'hai',
+                 4: 'xoe'}
+
 model = load_model('image-processing/models/mymodel.keras')
 
-bgModel = cv2.createBackgroundSubtractorMOG2(0, 50)  
-cap_region_x_begin, cap_region_y_end = 0.5, 0.8
-threshold, blurValue = 60, 41
-predThreshold = 98
-detect_timeout = 0.01  
+def predict_rgb_image_vgg(image):
+    image = np.array(image, dtype='float32')
+    image /= 255
+    pred_array = model.predict(image)
+    result = gesture_names[np.argmax(pred_array)]
+    score = float("%0.2f" % (max(pred_array[0]) * 100))
+    return result, score
 
-last_detect_time = time.time()
+def remove_background(frame):
+    fgmask = bgModel.apply(frame, learningRate=learningRate)
+    kernel = np.ones((3, 3), np.uint8)
+    fgmask = cv2.erode(fgmask, kernel, iterations=1)
+    res = cv2.bitwise_and(frame, frame, mask=fgmask)
+    return res
+
+cap_region_x_begin = 0.5
+cap_region_y_end = 0.8
+
+threshold = 60
+blurValue = 41
+bgSubThreshold = 50
+learningRate = 0
+
+predThreshold = 95
+isBgCaptured = 0
 
 camera = cv2.VideoCapture(0)
+camera.set(10, 200)
+camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.01)
 camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
 camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
-cv2.namedWindow('Camera', cv2.WINDOW_NORMAL)
-cv2.resizeWindow('Camera', 1280, 720)
-
-def predict_gesture(image):
-    image = np.array(image, dtype='float32') / 255.0
-    pred_array = model.predict(image)
-    result = gesture_names[np.argmax(pred_array)]
-    score = round(float(max(pred_array[0]) * 100), 2)
-    return result, score
-
 while camera.isOpened():
     ret, frame = camera.read()
-    if not ret:
+    frame = cv2.bilateralFilter(frame, 5, 50, 100)
+    frame = cv2.flip(frame, 1)
+    
+    overlay = frame.copy()
+    cv2.rectangle(frame, (int(cap_region_x_begin * frame.shape[1]), 0),
+                  (frame.shape[1], int(cap_region_y_end * frame.shape[0])), (255, 0, 0), 2)
+    
+    cv2.rectangle(frame, (0, 0), (1280, 50), (0, 0, 0), -1)
+    
+    if isBgCaptured == 1:
+        img = remove_background(frame)
+        img = img[0:int(cap_region_y_end * frame.shape[0]),
+                  int(cap_region_x_begin * frame.shape[1]):frame.shape[1]]
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        blur = cv2.GaussianBlur(gray, (blurValue, blurValue), 10)
+
+        ret, thresh = cv2.threshold(blur, threshold, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        kernel = np.ones((5,5),np.uint8)
+        test =  cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=1)
+        cv2.imshow('Threshold', test)
+        
+        contours, hierarchy = cv2.findContours(test, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        
+        min_area = 5000  
+        hand_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > min_area]
+
+        if hand_contours:
+            max_contour = max(hand_contours, key=cv2.contourArea)  
+            x, y, w, h = cv2.boundingRect(max_contour)
+            aspect_ratio = w / h
+
+            if 0.5 < aspect_ratio < 2.0:  
+                cv2.drawContours(frame, [max_contour + np.array([int(cap_region_x_begin * frame.shape[1]), 0])], -1, (0, 255, 0), 2)
+        
+        if (np.count_nonzero(test) / (test.shape[0] * test.shape[0]) > 0.2):
+            target = np.stack((test,) * 3, axis=-1)
+            target = cv2.resize(target, (224, 224))
+            target = target.reshape(1, 224, 224, 3)
+            prediction, score = predict_rgb_image_vgg(target)
+
+            if score >= predThreshold:
+                frame = cv2.addWeighted(overlay, 0.6, frame, 0.4, 0)
+                cv2.putText(frame, f"Sign: {prediction} ({score}%)", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+    
+    k = cv2.waitKey(10)
+    if k == ord('q'):
         break
+    elif k == ord('b'):
+        bgModel = cv2.createBackgroundSubtractorMOG2(0, bgSubThreshold)
+        isBgCaptured = 1
+        print('Background captured')
+        time.sleep(2)
+    elif k == ord('r'):
+        bgModel = None
+        isBgCaptured = 0
+        print('Background reset')
+        time.sleep(1)
 
-    frame = cv2.flip(cv2.bilateralFilter(frame, 5, 50, 100), 1)
-    
-    x1, y1, x2, y2 = int(cap_region_x_begin * frame.shape[1]), 0, frame.shape[1], int(cap_region_y_end * frame.shape[0])
-    cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+    cv2.imshow('Hand Gesture Recognition', frame)
 
-    fgmask = bgModel.apply(frame)
-    kernel = np.ones((3, 3), np.uint8)
-    fgmask = cv2.erode(fgmask, kernel, iterations=1)
-    img = cv2.bitwise_and(frame, frame, mask=fgmask)[y1:y2, x1:x2]
-
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    blur = cv2.GaussianBlur(gray, (blurValue, blurValue), 0)
-    _, thresh = cv2.threshold(blur, threshold, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    
-    # Áp dụng biến đổi hình thái
-    morph_kernel = np.ones((5, 5), np.uint8)
-    thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, morph_kernel)  # Loại bỏ nhiễu
-    thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, morph_kernel)  # Lấp đầy khoảng trống
-    
-    cv2.imshow('Processed Threshold', cv2.resize(thresh, dsize=None, fx=0.5, fy=0.5))
-
-    if np.count_nonzero(thresh) / (thresh.shape[0] * thresh.shape[1]) > 0.2:
-        last_detect_time = time.time()
-        target = np.stack((thresh,) * 3, axis=-1)
-        target = cv2.resize(target, (224, 224)).reshape(1, 224, 224, 3)
-        prediction, score = predict_gesture(target)
-        print(score)
-        if score >= predThreshold:
-            cv2.putText(frame, f"Sign: {prediction}", (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 0), 5)
-        else:
-            cv2.putText(frame, "Unknown", (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 255), 5)
-    else:
-        if time.time() - last_detect_time > detect_timeout:
-            bgModel = cv2.createBackgroundSubtractorMOG2(0, 50)
-            last_detect_time = time.time()
-            print("Cập nhật lại nền")
-
-    cv2.imshow('Camera', frame)
-
-    if cv2.waitKey(10) == ord('q'):
-        break
-
-camera.release()
 cv2.destroyAllWindows()
+camera.release()
