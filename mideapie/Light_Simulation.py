@@ -66,19 +66,19 @@ def open_camera():
                 thumb_index_distance = distance(lmList[tipIds[0]], lmList[tipIds[1]])
 
                 if fingers == [0, 0, 0, 0, 0]:  
-                    gesture_label.config(text="✊ Nắm tay")
+                    gesture_label.config(text="✊ nam")
 
                 elif fingers == [1, 1, 0, 0, 0]:  
                     gesture_label.config(text="L")
 
                 elif fingers == [0, 1, 1, 0, 0]:  
-                    gesture_label.config(text="✌️")
+                    gesture_label.config(text="✌️ hai")
 
                 elif fingers == [1, 1, 1, 1, 1]:  
-                    gesture_label.config(text="🖐️")
+                    gesture_label.config(text="🖐️ xoe")
 
                 elif thumb_index_distance < 30 and fingers[2] == 1 and fingers[3] == 1 and fingers[4] == 1:  
-                    gesture_label.config(text="👌")
+                    gesture_label.config(text="👌 ok")
 
                 else:
                     gesture_label.config(text="")
